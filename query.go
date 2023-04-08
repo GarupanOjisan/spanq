@@ -2,14 +2,20 @@ package spanq
 
 import (
 	"cloud.google.com/go/spanner/spansql"
+	"strings"
 )
 
+type extendedSelect struct {
+	spansql.Select
+	Join []spansql.SelectFromJoin
+}
+
 type QueryBuilder struct {
-	sel spansql.Select
+	sel extendedSelect
 }
 
 func Query() QueryBuilder {
-	return QueryBuilder{sel: spansql.Select{}}
+	return QueryBuilder{sel: extendedSelect{}}
 }
 
 type Expr interface {
@@ -98,6 +104,45 @@ func (q QueryBuilder) From(table string, opts ...FromOption) QueryBuilder {
 		Alias: alias,
 		Hints: hints,
 	})
+	return q
+}
+
+func (q QueryBuilder) InnerJoin(table string, on spansql.BoolExpr) QueryBuilder {
+	join := spansql.SelectFromJoin{
+		Type: spansql.InnerJoin,
+		LHS:  q.sel.From[0],
+		RHS: spansql.SelectFromTable{
+			Table: spansql.ID(table),
+		},
+		On: on,
+	}
+	q.sel.From = []spansql.SelectFrom{join}
+	return q
+}
+
+func (q QueryBuilder) LeftOuterJoin(table string, on spansql.BoolExpr) QueryBuilder {
+	join := spansql.SelectFromJoin{
+		Type: spansql.LeftJoin,
+		LHS:  q.sel.From[0],
+		RHS: spansql.SelectFromTable{
+			Table: spansql.ID(table),
+		},
+		On: on,
+	}
+	q.sel.From = []spansql.SelectFrom{join}
+	return q
+}
+
+func (q QueryBuilder) RightOuterJoin(table string, on spansql.BoolExpr) QueryBuilder {
+	join := spansql.SelectFromJoin{
+		Type: spansql.RightJoin,
+		LHS:  q.sel.From[0],
+		RHS: spansql.SelectFromTable{
+			Table: spansql.ID(table),
+		},
+		On: on,
+	}
+	q.sel.From = []spansql.SelectFrom{join}
 	return q
 }
 
@@ -210,5 +255,11 @@ func (q QueryBuilder) GroupBy(expr ...spansql.Expr) QueryBuilder {
 }
 
 func (q QueryBuilder) SQL() string {
-	return q.sel.SQL()
+	sql := q.sel.SQL()
+	// Add JOIN clauses
+	for _, join := range q.sel.Join {
+		joinSql := join.SQL()
+		sql = strings.Replace(sql, "FROM "+string(join.LHS.(spansql.SelectFromTable).Table), "FROM "+string(join.LHS.(spansql.SelectFromTable).Table)+" "+joinSql, 1)
+	}
+	return sql
 }
